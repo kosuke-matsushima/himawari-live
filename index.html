@@ -35,8 +35,10 @@
     touch-action:none;
   }
   .view:active{cursor:grabbing}
-  .stage{position:absolute;inset:0;transform-origin:0 0;will-change:transform;display:grid;background:#000}
-  .stage img{width:100%;height:100%;display:block;color:transparent;font-size:0}
+  .stage{position:absolute;inset:0;transform-origin:0 0;will-change:transform;background:#000}
+  .layer{position:absolute;inset:0;display:grid}
+  .layer.hide{visibility:hidden}
+  .layer img{width:100%;height:100%;display:block;color:transparent;font-size:0}
   .controls{display:flex;gap:8px;margin-top:22px;flex-wrap:wrap;justify-content:center;align-items:center}
   .controls button{
     background:transparent;border:1px solid #283a5c;color:#9fb0cc;
@@ -60,9 +62,13 @@
 <body>
   <h1>HIMAWARI-9 ／ 直近24時間のタイムラプス</h1>
   <div class="ts" id="ts">読み込み中…</div>
-  <div class="view" id="view"><div class="stage" id="stage"></div></div>
+  <div class="view" id="view"><div class="stage" id="stage">
+    <div class="layer" id="layA"></div><div class="layer hide" id="layB"></div>
+  </div></div>
   <div class="controls">
+    <button id="bPrev">⏮</button>
     <button id="bPlay">⏸</button>
+    <button id="bNext">⏭</button>
     <button id="bJp">日本</button>
     <button id="bAll">全球</button>
     <button id="bIn">＋</button>
@@ -81,8 +87,9 @@ const FRAMES=144, STEP=10; // 144フレーム × 10分 = 直近24時間（公式
 const JP={x:0.50, y:0.235};
 const HOME={x:0.52, y:0.32, z:1.5};   // 初期表示（地球の縁が見える引き＝台風が中央）
 let latest=null, V=0, zoom=1, panX=0, panY=0;
-let frames=[], seq=[], tiles=[], idx=0, playing=true, fps=12, timer=null;
-let loaded=0, total=0, ready=false, loadGuard=0;
+let frames=[], idx=0, playing=true, fps=12, timer=null;
+let loaded=0, total=0, started=false, loadGuard=0;
+let layA, layB, front;
 
 const pad=n=>String(n).padStart(2,'0');
 const view=document.getElementById('view');
@@ -116,61 +123,82 @@ function urlFor(date,x,y){
   return `${BASE}/${LEVEL}d/550/${Y}/${M}/${D}/${hms}_${x}_${y}.png`;
 }
 
-function ensureTiles(){                     // 表示用タイルは LEVEL×LEVEL 枚だけ（使い回す）
-  if(tiles.length) return;
-  stage.style.gridTemplateColumns=`repeat(${LEVEL},1fr)`;
-  for(let k=0;k<LEVEL*LEVEL;k++){ const im=new Image(); im.alt=''; stage.appendChild(im); tiles.push(im); }
+function ensureLayers(){                    // 表示は2レイヤー（各 LEVEL×LEVEL 枚）を重ねて交互に使う
+  if(layA) return;
+  layA=document.getElementById('layA'); layB=document.getElementById('layB');
+  [layA,layB].forEach(L=>{
+    L.style.gridTemplateColumns=`repeat(${LEVEL},1fr)`;
+    for(let k=0;k<LEVEL*LEVEL;k++) L.appendChild(new Image());
+  });
+  front=layA;
 }
 function buildFrames(){
   const [day,time]=latest.split(' ');
   const base=new Date(`${day}T${time}Z`).getTime();
-  ensureTiles();
-  frames=[]; seq=[];
-  loaded=0; total=FRAMES*LEVEL*LEVEL; ready=false;
+  ensureLayers();
+  frames=[];
+  loaded=0; total=FRAMES*LEVEL*LEVEL; started=false;
   for(let i=FRAMES-1;i>=0;i--){            // 古い→新しい
     const date=new Date(base - i*STEP*60000);
-    const urls=[]; const fobj={date,urls,bad:false};   // bad=欠測コマ（404など）
+    const urls=[]; const fobj={date,urls,bad:false,cnt:0,ready:false};
     for(let y=0;y<LEVEL;y++) for(let x=0;x<LEVEL;x++){
       const url=urlFor(date,x,y); urls.push(url);
-      const pre=new Image();                 // プリロード（ブラウザのキャッシュを温める／要素は持たない）
-      pre.onload=onTileLoad;
-      pre.onerror=()=>{ fobj.bad=true; onTileLoad(); };
+      const pre=new Image();                 // プリロード（キャッシュを温める）
+      pre.onload=()=>onTileLoad(fobj);
+      pre.onerror=()=>{ fobj.bad=true; onTileLoad(fobj); };
       pre.src=url;
-      if(pre.complete){ const ok=pre.naturalWidth>0; pre.onload=pre.onerror=null; if(!ok) fobj.bad=true; onTileLoad(); }
+      if(pre.complete){ const ok=pre.naturalWidth>0; pre.onload=pre.onerror=null; if(!ok) fobj.bad=true; onTileLoad(fobj); }
     }
     frames.push(fobj);
   }
-  showFrame(frames[frames.length-1]);      // 読み込み中は最新を仮表示
-  clearTimeout(loadGuard); loadGuard=setTimeout(finishLoad,9000);   // 保険：9秒で再生開始
+  idx=frames.length-1;
+  clearTimeout(loadGuard); loadGuard=setTimeout(()=>startPlayback(true),9000);   // 保険
 }
-function finishLoad(){
-  if(ready) return;
-  ready=true; tsEl.textContent='';
-  seq=frames.filter(f=>!f.bad);            // 欠測コマを再生の輪から除外
-  if(!seq.length) seq=frames.slice();
-  idx=seq.length-1; showFrame(seq[idx]);   // 最新の有効コマ
+function onTileLoad(f){
+  loaded++;
+  f.cnt++;
+  if(f.cnt>=LEVEL*LEVEL && !f.bad) f.ready=true;   // 4枚全部そろったコマだけ「再生OK」
+  if(!started){
+    tsEl.textContent=`読み込み中… ${Math.round(loaded/total*100)}%`;
+    if(frames.filter(x=>x.ready).length>=3) startPlayback();
+  }
+}
+function startPlayback(force){
+  if(started) return;
+  if(!force && !frames.some(f=>f.ready)) return;
+  started=true; tsEl.textContent='';
+  idx=stepReady(frames.length,-1);         // 最新側の有効コマ
+  showFrame(frames[idx]);
   if(playing) play();
 }
-function onTileLoad(){
-  loaded++;
-  if(!ready) tsEl.textContent=`読み込み中… ${Math.round(loaded/total*100)}%`;
-  if(loaded>=total) finishLoad();
+function stepReady(from,dir){               // dir方向の「次の読み込み済みコマ」を探す
+  for(let n=1;n<=frames.length;n++){
+    const j=((from+dir*n)%frames.length+frames.length)%frames.length;
+    if(frames[j].ready) return j;
+  }
+  return ((from%frames.length)+frames.length)%frames.length;
 }
 function showFrame(f){
-  for(let k=0;k<tiles.length;k++) tiles[k].src=f.urls[k];   // 4枚の中身を差し替えるだけ
+  const back=(front===layA)?layB:layA;      // 裏レイヤーに次の絵を用意してから切替（黒を出さない）
+  const imgs=back.children;
+  for(let k=0;k<imgs.length;k++) imgs[k].src=f.urls[k];
+  Promise.all([...imgs].map(im=>im.decode().catch(()=>{}))).then(()=>{
+    back.classList.remove('hide'); front.classList.add('hide'); front=back;
+  });
   const fmt=new Intl.DateTimeFormat('ja-JP',{
     timeZone:'Asia/Tokyo',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false
   }).format(f.date).replace(/\//g,'.');
   const tag = f===frames[frames.length-1] ? '（最新）' : '';
   tsEl.textContent=`${fmt} JST${tag}`;
 }
-function tick(){ idx=(idx+1)%seq.length; showFrame(seq[idx]); }
+function tick(){ idx=stepReady(idx,1); showFrame(frames[idx]); }
 function play(){
   playing=true; document.getElementById('bPlay').textContent='⏸';
   clearInterval(timer);
-  if(ready) timer=setInterval(tick,1000/fps);   // 全ロード後のみ回す
+  if(started) timer=setInterval(tick,1000/fps);
 }
 function pause(){ playing=false; clearInterval(timer); document.getElementById('bPlay').textContent='▶'; }
+function step(dir){ pause(); idx=stepReady(idx,dir); showFrame(frames[idx]); }   // コマ送り
 
 // ---- 操作 ----
 const pts=new Map(); let lastDist=0;
@@ -198,6 +226,8 @@ view.addEventListener('wheel',e=>{
 },{passive:false});
 
 document.getElementById('bPlay').onclick=()=>{ playing?pause():play(); };
+document.getElementById('bPrev').onclick=()=>step(-1);
+document.getElementById('bNext').onclick=()=>step(1);
 document.getElementById('bJp').onclick =()=>focus(JP.x,JP.y,3);
 document.getElementById('bAll').onclick=()=>focus(0.5,0.5,1);
 document.getElementById('bIn').onclick =()=>zoomAt(V/2,V/2,1.3);
