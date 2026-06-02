@@ -89,7 +89,7 @@ const HOME={x:0.52, y:0.32, z:1.5};   // 初期表示（地球の縁が見える
 let latest=null, V=0, zoom=1, panX=0, panY=0;
 let frames=[], idx=0, playing=true, fps=12, timer=null;
 let loaded=0, total=0, started=false, loadGuard=0;
-let layA, layB, front;
+let layA, layB, front, showToken=0;
 
 const pad=n=>String(n).padStart(2,'0');
 const view=document.getElementById('view');
@@ -179,10 +179,12 @@ function stepReady(from,dir){               // dir方向の「次の読み込み
   return ((from%frames.length)+frames.length)%frames.length;
 }
 function showFrame(f){
+  const my=++showToken;                     // この呼び出しの世代番号
   const back=(front===layA)?layB:layA;      // 裏レイヤーに次の絵を用意してから切替（黒を出さない）
   const imgs=back.children;
   for(let k=0;k<imgs.length;k++) imgs[k].src=f.urls[k];
   Promise.all([...imgs].map(im=>im.decode().catch(()=>{}))).then(()=>{
+    if(my!==showToken) return;              // もっと新しい表示要求が来ていたら破棄（時間が前後するのを防ぐ）
     back.classList.remove('hide'); front.classList.add('hide'); front=back;
   });
   const fmt=new Intl.DateTimeFormat('ja-JP',{
