@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<title>ひまわり9号 — いまの地球</title>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{
+    background:#05070d;color:#cdd6e6;
+    font-family:"Hiragino Kaku Gothic ProN","Yu Gothic",sans-serif;
+    min-height:100vh;display:flex;flex-direction:column;align-items:center;
+    padding:max(18px,env(safe-area-inset-top)) 16px calc(28px + env(safe-area-inset-bottom));
+    overflow:hidden;
+  }
+  h1{font-size:13px;letter-spacing:.34em;font-weight:600;color:#7fb3ff;margin-bottom:6px}
+  .ts{font-size:12px;color:#8a98b4;letter-spacing:.06em;margin-bottom:18px;min-height:16px}
+  .view{
+    position:relative;width:min(92vw,68vh,720px);aspect-ratio:1;
+    border-radius:18px;overflow:hidden;background:#000;cursor:grab;
+    box-shadow:0 0 90px rgba(60,120,220,.18), inset 0 0 1px #1a2a44;
+    touch-action:none;
+  }
+  .view:active{cursor:grabbing}
+  .stage{position:absolute;inset:0;transform-origin:0 0;will-change:transform}
+  .frame{position:absolute;inset:0;display:grid;background:#000;visibility:hidden}
+  .frame.on{visibility:visible}
+  .frame img{width:100%;height:100%;display:block}
+  .controls{display:flex;gap:8px;margin-top:22px;flex-wrap:wrap;justify-content:center;align-items:center}
+  .controls button{
+    background:transparent;border:1px solid #283a5c;color:#9fb0cc;
+    font:inherit;font-size:12px;letter-spacing:.06em;padding:7px 15px;
+    border-radius:999px;cursor:pointer;transition:all .15s ease;min-width:40px;
+  }
+  .controls button:hover{border-color:#3a5da0;color:#dce7ff}
+  .speed{display:flex;align-items:center;gap:7px;color:#6a7894;font-size:11px;margin-left:4px}
+  .speed input{accent-color:#3a5da0}
+  .note{font-size:11px;color:#566480;margin-top:16px;max-width:560px;text-align:center;line-height:1.9}
+  @media (max-width:600px){
+    h1{letter-spacing:.16em;font-size:11px;text-align:center}
+    .ts{margin-bottom:14px}
+    .controls{gap:7px;margin-top:18px}
+    .controls button{padding:9px 13px;min-height:40px}
+    .speed{width:100%;justify-content:center;margin:6px 0 0}
+    .note{font-size:10.5px;margin-top:13px}
+  }
+</style>
+</head>
+<body>
+  <h1>HIMAWARI-9 ／ 直近24時間のタイムラプス</h1>
+  <div class="ts" id="ts">読み込み中…</div>
+  <div class="view" id="view"><div class="stage" id="stage"></div></div>
+  <div class="controls">
+    <button id="bPlay">⏸</button>
+    <button id="bJp">日本</button>
+    <button id="bAll">全球</button>
+    <button id="bIn">＋</button>
+    <button id="bOut">−</button>
+    <span class="speed">速さ<input id="spd" type="range" min="3" max="18" value="8"></span>
+  </div>
+  <div class="note">
+    ひまわり9号のトゥルーカラー画像（提供：NICT）を、30分ごとに並べて連続再生しています。<br>
+    地球は静止衛星から見て止まって見え、動くのは雲＝台風の渦です。ドラッグで移動／ホイール・ピンチで拡大。
+  </div>
+
+<script>
+const BASE='https://himawari8.nict.go.jp/img/D531106';
+const MOBILE=matchMedia('(max-width:600px)').matches;
+const LEVEL=MOBILE?2:4;   // スマホは軽さ優先で低解像度（画面が小さいので十分きれい）
+const FRAMES=48, STEP=30; // 48フレーム × 30分 = 直近24時間（昼夜が1周してループのつなぎ目が消える）
+const JP={x:0.50, y:0.235};
+const HOME={x:0.52, y:0.32, z:1.5};   // 初期表示（地球の縁が見える引き＝台風が中央）
+let latest=null, V=0, zoom=1, panX=0, panY=0;
+let frames=[], idx=0, playing=true, fps=8, timer=null;
+let loaded=0, total=0, ready=false;
+
+const pad=n=>String(n).padStart(2,'0');
+const view=document.getElementById('view');
+const stage=document.getElementById('stage');
+const tsEl=document.getElementById('ts');
+
+function apply(){ stage.style.transform=`translate(${panX}px,${panY}px) scale(${zoom})`; }
+function focus(cx,cy,z){ zoom=z; panX=V/2-cx*V*zoom; panY=V/2-cy*V*zoom; apply(); }
+function zoomAt(px,py,f){
+  const nz=Math.min(12,Math.max(0.6, zoom*f));
+  const sx=(px-panX)/zoom, sy=(py-panY)/zoom;
+  zoom=nz; panX=px-sx*zoom; panY=py-sy*zoom; apply();
+}
+
+function fallbackDate(){
+  const d=new Date(Date.now()-30*60*1000);
+  d.setUTCMinutes(Math.floor(d.getUTCMinutes()/10)*10,0,0);
+  return `${d.getUTCFullYear()}-${pad(d.getUTCMonth()+1)}-${pad(d.getUTCDate())} `
+       + `${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:00`;
+}
+async function fetchLatest(){
+  try{
+    const r=await fetch(BASE+'/latest.json?_='+Date.now());
+    if(!r.ok) throw 0;
+    return (await r.json()).date;
+  }catch(e){ return fallbackDate(); }
+}
+function urlFor(date,x,y){
+  const Y=date.getUTCFullYear(),M=pad(date.getUTCMonth()+1),D=pad(date.getUTCDate());
+  const hms=pad(date.getUTCHours())+pad(date.getUTCMinutes())+'00';
+  return `${BASE}/${LEVEL}d/550/${Y}/${M}/${D}/${hms}_${x}_${y}.png`;
+}
+
+function buildFrames(){
+  const [day,time]=latest.split(' ');
+  const base=new Date(`${day}T${time}Z`).getTime();
+  stage.innerHTML=''; frames=[];
+  loaded=0; total=FRAMES*LEVEL*LEVEL; ready=false;
+  for(let i=FRAMES-1;i>=0;i--){            // 古い→新しい
+    const date=new Date(base - i*STEP*60000);
+    const el=document.createElement('div');
+    el.className='frame';
+    el.style.gridTemplateColumns=`repeat(${LEVEL},1fr)`;
+    for(let y=0;y<LEVEL;y++) for(let x=0;x<LEVEL;x++){
+      const img=new Image(); img.alt='';
+      img.onload=img.onerror=onTileLoad;
+      img.src=urlFor(date,x,y);
+      el.appendChild(img);
+      if(img.complete){ img.onload=img.onerror=null; onTileLoad(); }  // キャッシュ済みはonload不発火→手動カウント
+    }
+    stage.appendChild(el);
+    frames.push({el,date});
+  }
+  idx=frames.length-1; show(idx);          // 読み込み中は最新フレームを静止表示
+}
+function onTileLoad(){
+  loaded++;
+  tsEl.textContent=`読み込み中… ${Math.round(loaded/total*100)}%`;
+  if(loaded>=total && !ready){             // 全フレーム揃ってから（チカつき防止）
+    ready=true; tsEl.textContent='';
+    if(playing) play();
+  }
+}
+function show(i){
+  frames.forEach((f,k)=>f.el.classList.toggle('on',k===i));
+  const fmt=new Intl.DateTimeFormat('ja-JP',{
+    timeZone:'Asia/Tokyo',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false
+  }).format(frames[i].date).replace(/\//g,'.');
+  const tag = i===frames.length-1 ? '（最新）' : '';
+  tsEl.textContent=`${fmt} JST${tag}`;
+}
+function tick(){ idx=(idx+1)%frames.length; show(idx); }
+function play(){
+  playing=true; document.getElementById('bPlay').textContent='⏸';
+  clearInterval(timer);
+  if(ready) timer=setInterval(tick,1000/fps);   // 全ロード後のみ回す
+}
+function pause(){ playing=false; clearInterval(timer); document.getElementById('bPlay').textContent='▶'; }
+
+// ---- 操作 ----
+const pts=new Map(); let lastDist=0;
+view.addEventListener('pointerdown',e=>{ view.setPointerCapture(e.pointerId); pts.set(e.pointerId,{x:e.clientX,y:e.clientY}); });
+view.addEventListener('pointermove',e=>{
+  if(!pts.has(e.pointerId)) return;
+  const prev=pts.get(e.pointerId);
+  pts.set(e.pointerId,{x:e.clientX,y:e.clientY});
+  if(pts.size===1){ panX+=e.clientX-prev.x; panY+=e.clientY-prev.y; apply(); }
+  else if(pts.size===2){
+    const a=[...pts.values()];
+    const d=Math.hypot(a[0].x-a[1].x,a[0].y-a[1].y);
+    if(lastDist){ const r=view.getBoundingClientRect(); zoomAt((a[0].x+a[1].x)/2-r.left,(a[0].y+a[1].y)/2-r.top, d/lastDist); }
+    lastDist=d;
+  }
+});
+function lift(e){ pts.delete(e.pointerId); lastDist=0; }
+view.addEventListener('pointerup',lift);
+view.addEventListener('pointercancel',lift);
+view.addEventListener('wheel',e=>{
+  e.preventDefault();
+  const r=view.getBoundingClientRect(), px=e.clientX-r.left, py=e.clientY-r.top;
+  if(e.ctrlKey) zoomAt(px,py, e.deltaY<0?1.07:0.93);
+  else { panX-=e.deltaX; panY-=e.deltaY; apply(); }
+},{passive:false});
+
+document.getElementById('bPlay').onclick=()=>{ playing?pause():play(); };
+document.getElementById('bJp').onclick =()=>focus(JP.x,JP.y,3);
+document.getElementById('bAll').onclick=()=>focus(0.5,0.5,1);
+document.getElementById('bIn').onclick =()=>zoomAt(V/2,V/2,1.3);
+document.getElementById('bOut').onclick=()=>zoomAt(V/2,V/2,1/1.3);
+document.getElementById('spd').oninput=e=>{ fps=+e.target.value; if(playing) play(); };
+
+async function rebuild(){
+  latest=await fetchLatest();
+  buildFrames();
+  if(playing) play();
+}
+function init(){
+  V=view.clientWidth;
+  focus(HOME.x,HOME.y,HOME.z);
+  rebuild();
+  setInterval(rebuild,10*60*1000);   // 10分ごとに最新フレームへ更新
+}
+window.addEventListener('resize',()=>{ V=view.clientWidth; apply(); });
+init();
+</script>
+</body>
+</html>
