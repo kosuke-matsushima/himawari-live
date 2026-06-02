@@ -35,10 +35,8 @@
     touch-action:none;
   }
   .view:active{cursor:grabbing}
-  .stage{position:absolute;inset:0;transform-origin:0 0;will-change:transform}
-  .frame{position:absolute;inset:0;display:grid;background:#000;visibility:hidden}
-  .frame.on{visibility:visible}
-  .frame img{width:100%;height:100%;display:block;color:transparent;font-size:0}
+  .stage{position:absolute;inset:0;transform-origin:0 0;will-change:transform;display:grid;background:#000}
+  .stage img{width:100%;height:100%;display:block;color:transparent;font-size:0}
   .controls{display:flex;gap:8px;margin-top:22px;flex-wrap:wrap;justify-content:center;align-items:center}
   .controls button{
     background:transparent;border:1px solid #283a5c;color:#9fb0cc;
@@ -83,8 +81,8 @@ const FRAMES=144, STEP=10; // 144フレーム × 10分 = 直近24時間（公式
 const JP={x:0.50, y:0.235};
 const HOME={x:0.52, y:0.32, z:1.5};   // 初期表示（地球の縁が見える引き＝台風が中央）
 let latest=null, V=0, zoom=1, panX=0, panY=0;
-let frames=[], seq=[], idx=0, playing=true, fps=12, timer=null;
-let loaded=0, total=0, ready=false;
+let frames=[], seq=[], tiles=[], idx=0, playing=true, fps=12, timer=null;
+let loaded=0, total=0, ready=false, loadGuard=0;
 
 const pad=n=>String(n).padStart(2,'0');
 const view=document.getElementById('view');
@@ -118,43 +116,48 @@ function urlFor(date,x,y){
   return `${BASE}/${LEVEL}d/550/${Y}/${M}/${D}/${hms}_${x}_${y}.png`;
 }
 
+function ensureTiles(){                     // 表示用タイルは LEVEL×LEVEL 枚だけ（使い回す）
+  if(tiles.length) return;
+  stage.style.gridTemplateColumns=`repeat(${LEVEL},1fr)`;
+  for(let k=0;k<LEVEL*LEVEL;k++){ const im=new Image(); im.alt=''; stage.appendChild(im); tiles.push(im); }
+}
 function buildFrames(){
   const [day,time]=latest.split(' ');
   const base=new Date(`${day}T${time}Z`).getTime();
-  stage.innerHTML=''; frames=[]; seq=[];
+  ensureTiles();
+  frames=[]; seq=[];
   loaded=0; total=FRAMES*LEVEL*LEVEL; ready=false;
   for(let i=FRAMES-1;i>=0;i--){            // 古い→新しい
     const date=new Date(base - i*STEP*60000);
-    const el=document.createElement('div');
-    el.className='frame';
-    el.style.gridTemplateColumns=`repeat(${LEVEL},1fr)`;
-    const fobj={el,date,bad:false};        // bad=欠測コマ（タイルが404など）
+    const urls=[]; const fobj={date,urls,bad:false};   // bad=欠測コマ（404など）
     for(let y=0;y<LEVEL;y++) for(let x=0;x<LEVEL;x++){
-      const img=new Image(); img.alt='';
-      img.onload=onTileLoad;
-      img.onerror=()=>{ fobj.bad=true; onTileLoad(); };
-      img.src=urlFor(date,x,y);
-      el.appendChild(img);
-      if(img.complete){ const ok=img.naturalWidth>0; img.onload=img.onerror=null; if(!ok) fobj.bad=true; onTileLoad(); }
+      const url=urlFor(date,x,y); urls.push(url);
+      const pre=new Image();                 // プリロード（ブラウザのキャッシュを温める／要素は持たない）
+      pre.onload=onTileLoad;
+      pre.onerror=()=>{ fobj.bad=true; onTileLoad(); };
+      pre.src=url;
+      if(pre.complete){ const ok=pre.naturalWidth>0; pre.onload=pre.onerror=null; if(!ok) fobj.bad=true; onTileLoad(); }
     }
-    stage.appendChild(el);
     frames.push(fobj);
   }
   showFrame(frames[frames.length-1]);      // 読み込み中は最新を仮表示
+  clearTimeout(loadGuard); loadGuard=setTimeout(finishLoad,9000);   // 保険：9秒で再生開始
+}
+function finishLoad(){
+  if(ready) return;
+  ready=true; tsEl.textContent='';
+  seq=frames.filter(f=>!f.bad);            // 欠測コマを再生の輪から除外
+  if(!seq.length) seq=frames.slice();
+  idx=seq.length-1; showFrame(seq[idx]);   // 最新の有効コマ
+  if(playing) play();
 }
 function onTileLoad(){
   loaded++;
-  tsEl.textContent=`読み込み中… ${Math.round(loaded/total*100)}%`;
-  if(loaded>=total && !ready){             // 全フレーム揃ってから（チカつき防止）
-    ready=true; tsEl.textContent='';
-    seq=frames.filter(f=>!f.bad);          // 欠測コマを再生の輪から除外
-    if(!seq.length) seq=frames.slice();
-    idx=seq.length-1; showFrame(seq[idx]); // 最新の有効コマ
-    if(playing) play();
-  }
+  if(!ready) tsEl.textContent=`読み込み中… ${Math.round(loaded/total*100)}%`;
+  if(loaded>=total) finishLoad();
 }
 function showFrame(f){
-  frames.forEach(x=>x.el.classList.toggle('on', x===f));
+  for(let k=0;k<tiles.length;k++) tiles[k].src=f.urls[k];   // 4枚の中身を差し替えるだけ
   const fmt=new Intl.DateTimeFormat('ja-JP',{
     timeZone:'Asia/Tokyo',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false
   }).format(f.date).replace(/\//g,'.');
