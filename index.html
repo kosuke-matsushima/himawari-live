@@ -38,7 +38,7 @@
   .stage{position:absolute;inset:0;transform-origin:0 0;will-change:transform}
   .frame{position:absolute;inset:0;display:grid;background:#000;visibility:hidden}
   .frame.on{visibility:visible}
-  .frame img{width:100%;height:100%;display:block}
+  .frame img{width:100%;height:100%;display:block;color:transparent;font-size:0}
   .controls{display:flex;gap:8px;margin-top:22px;flex-wrap:wrap;justify-content:center;align-items:center}
   .controls button{
     background:transparent;border:1px solid #283a5c;color:#9fb0cc;
@@ -83,7 +83,7 @@ const FRAMES=144, STEP=10; // 144フレーム × 10分 = 直近24時間（公式
 const JP={x:0.50, y:0.235};
 const HOME={x:0.52, y:0.32, z:1.5};   // 初期表示（地球の縁が見える引き＝台風が中央）
 let latest=null, V=0, zoom=1, panX=0, panY=0;
-let frames=[], idx=0, playing=true, fps=12, timer=null;
+let frames=[], seq=[], idx=0, playing=true, fps=12, timer=null;
 let loaded=0, total=0, ready=false;
 
 const pad=n=>String(n).padStart(2,'0');
@@ -121,42 +121,47 @@ function urlFor(date,x,y){
 function buildFrames(){
   const [day,time]=latest.split(' ');
   const base=new Date(`${day}T${time}Z`).getTime();
-  stage.innerHTML=''; frames=[];
+  stage.innerHTML=''; frames=[]; seq=[];
   loaded=0; total=FRAMES*LEVEL*LEVEL; ready=false;
   for(let i=FRAMES-1;i>=0;i--){            // 古い→新しい
     const date=new Date(base - i*STEP*60000);
     const el=document.createElement('div');
     el.className='frame';
     el.style.gridTemplateColumns=`repeat(${LEVEL},1fr)`;
+    const fobj={el,date,bad:false};        // bad=欠測コマ（タイルが404など）
     for(let y=0;y<LEVEL;y++) for(let x=0;x<LEVEL;x++){
       const img=new Image(); img.alt='';
-      img.onload=img.onerror=onTileLoad;
+      img.onload=onTileLoad;
+      img.onerror=()=>{ fobj.bad=true; onTileLoad(); };
       img.src=urlFor(date,x,y);
       el.appendChild(img);
-      if(img.complete){ img.onload=img.onerror=null; onTileLoad(); }  // キャッシュ済みはonload不発火→手動カウント
+      if(img.complete){ const ok=img.naturalWidth>0; img.onload=img.onerror=null; if(!ok) fobj.bad=true; onTileLoad(); }
     }
     stage.appendChild(el);
-    frames.push({el,date});
+    frames.push(fobj);
   }
-  idx=frames.length-1; show(idx);          // 読み込み中は最新フレームを静止表示
+  showFrame(frames[frames.length-1]);      // 読み込み中は最新を仮表示
 }
 function onTileLoad(){
   loaded++;
   tsEl.textContent=`読み込み中… ${Math.round(loaded/total*100)}%`;
   if(loaded>=total && !ready){             // 全フレーム揃ってから（チカつき防止）
     ready=true; tsEl.textContent='';
+    seq=frames.filter(f=>!f.bad);          // 欠測コマを再生の輪から除外
+    if(!seq.length) seq=frames.slice();
+    idx=seq.length-1; showFrame(seq[idx]); // 最新の有効コマ
     if(playing) play();
   }
 }
-function show(i){
-  frames.forEach((f,k)=>f.el.classList.toggle('on',k===i));
+function showFrame(f){
+  frames.forEach(x=>x.el.classList.toggle('on', x===f));
   const fmt=new Intl.DateTimeFormat('ja-JP',{
     timeZone:'Asia/Tokyo',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false
-  }).format(frames[i].date).replace(/\//g,'.');
-  const tag = i===frames.length-1 ? '（最新）' : '';
+  }).format(f.date).replace(/\//g,'.');
+  const tag = f===frames[frames.length-1] ? '（最新）' : '';
   tsEl.textContent=`${fmt} JST${tag}`;
 }
-function tick(){ idx=(idx+1)%frames.length; show(idx); }
+function tick(){ idx=(idx+1)%seq.length; showFrame(seq[idx]); }
 function play(){
   playing=true; document.getElementById('bPlay').textContent='⏸';
   clearInterval(timer);
