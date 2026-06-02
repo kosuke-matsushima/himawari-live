@@ -73,7 +73,7 @@
     <button id="bAll">全球</button>
     <button id="bIn">＋</button>
     <button id="bOut">−</button>
-    <span class="speed">速さ<input id="spd" type="range" min="4" max="24" value="12"></span>
+    <span class="speed">速さ<input id="spd" type="range" min="4" max="16" value="12"></span>
   </div>
   <div class="note">
     ひまわり9号のトゥルーカラー画像（提供：NICT）を、10分ごとに並べて連続再生しています。<br>
@@ -238,8 +238,8 @@ document.getElementById('spd').oninput=e=>{ fps=+e.target.value; if(playing) pla
 
 async function rebuild(){
   latest=await fetchLatest();
+  clearInterval(timer); showToken++;       // 進行中の再生と古い非同期スワップを無効化（再構築レース対策）
   buildFrames();
-  if(playing) play();
 }
 function init(){
   V=view.clientWidth;
