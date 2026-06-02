@@ -35,10 +35,8 @@
     touch-action:none;
   }
   .view:active{cursor:grabbing}
-  .stage{position:absolute;inset:0;transform-origin:0 0;will-change:transform;background:#000}
-  .layer{position:absolute;inset:0;display:grid}
-  .layer.hide{visibility:hidden}
-  .layer img{width:100%;height:100%;display:block;color:transparent;font-size:0}
+  .stage{position:absolute;inset:0;transform-origin:0 0;will-change:transform;display:grid;background:#000}
+  .stage img{width:100%;height:100%;display:block;color:transparent;font-size:0}
   .controls{display:flex;gap:8px;margin-top:22px;flex-wrap:wrap;justify-content:center;align-items:center}
   .controls button{
     background:transparent;border:1px solid #283a5c;color:#9fb0cc;
@@ -62,9 +60,7 @@
 <body>
   <h1>HIMAWARI-9 ／ 直近24時間のタイムラプス</h1>
   <div class="ts" id="ts">読み込み中…</div>
-  <div class="view" id="view"><div class="stage" id="stage">
-    <div class="layer" id="layA"></div><div class="layer hide" id="layB"></div>
-  </div></div>
+  <div class="view" id="view"><div class="stage" id="stage"></div></div>
   <div class="controls">
     <button id="bPrev">⏮</button>
     <button id="bPlay">⏸</button>
@@ -89,7 +85,7 @@ const HOME={x:0.52, y:0.32, z:1.5};   // 初期表示（地球の縁が見える
 let latest=null, V=0, zoom=1, panX=0, panY=0;
 let frames=[], idx=0, playing=true, fps=12, timer=null;
 let loaded=0, total=0, started=false, loadGuard=0;
-let layA, layB, front, showToken=0;
+let tiles=[];
 
 const pad=n=>String(n).padStart(2,'0');
 const view=document.getElementById('view');
@@ -123,19 +119,15 @@ function urlFor(date,x,y){
   return `${BASE}/${LEVEL}d/550/${Y}/${M}/${D}/${hms}_${x}_${y}.png`;
 }
 
-function ensureLayers(){                    // 表示は2レイヤー（各 LEVEL×LEVEL 枚）を重ねて交互に使う
-  if(layA) return;
-  layA=document.getElementById('layA'); layB=document.getElementById('layB');
-  [layA,layB].forEach(L=>{
-    L.style.gridTemplateColumns=`repeat(${LEVEL},1fr)`;
-    for(let k=0;k<LEVEL*LEVEL;k++) L.appendChild(new Image());
-  });
-  front=layA;
+function ensureTiles(){                     // 表示タイルは LEVEL×LEVEL 枚だけ（使い回す）
+  if(tiles.length) return;
+  stage.style.gridTemplateColumns=`repeat(${LEVEL},1fr)`;
+  for(let k=0;k<LEVEL*LEVEL;k++){ const im=new Image(); im.alt=''; stage.appendChild(im); tiles.push(im); }
 }
 function buildFrames(){
   const [day,time]=latest.split(' ');
   const base=new Date(`${day}T${time}Z`).getTime();
-  ensureLayers();
+  ensureTiles();
   frames=[];
   loaded=0; total=FRAMES*LEVEL*LEVEL; started=false;
   for(let i=FRAMES-1;i>=0;i--){            // 古い→新しい
@@ -179,14 +171,7 @@ function stepReady(from,dir){               // dir方向の「次の読み込み
   return ((from%frames.length)+frames.length)%frames.length;
 }
 function showFrame(f){
-  const my=++showToken;                     // この呼び出しの世代番号
-  const back=(front===layA)?layB:layA;      // 裏レイヤーに次の絵を用意してから切替（黒を出さない）
-  const imgs=back.children;
-  for(let k=0;k<imgs.length;k++) imgs[k].src=f.urls[k];
-  Promise.all([...imgs].map(im=>im.decode().catch(()=>{}))).then(()=>{
-    if(my!==showToken) return;              // もっと新しい表示要求が来ていたら破棄（時間が前後するのを防ぐ）
-    back.classList.remove('hide'); front.classList.add('hide'); front=back;
-  });
+  for(let k=0;k<tiles.length;k++) tiles[k].src=f.urls[k];   // 読み込み済みコマだけ表示するので即時・黒なし
   const fmt=new Intl.DateTimeFormat('ja-JP',{
     timeZone:'Asia/Tokyo',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false
   }).format(f.date).replace(/\//g,'.');
@@ -238,7 +223,7 @@ document.getElementById('spd').oninput=e=>{ fps=+e.target.value; if(playing) pla
 
 async function rebuild(){
   latest=await fetchLatest();
-  clearInterval(timer); showToken++;       // 進行中の再生と古い非同期スワップを無効化（再構築レース対策）
+  clearInterval(timer);                    // 進行中の再生を止めてから作り直す
   buildFrames();
 }
 function init(){
