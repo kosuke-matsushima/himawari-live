@@ -69,22 +69,21 @@
     <button id="bAll">全球</button>
     <button id="bIn">＋</button>
     <button id="bOut">−</button>
-    <span class="speed">速さ<input id="spd" type="range" min="3" max="18" value="8"></span>
+    <span class="speed">速さ<input id="spd" type="range" min="4" max="24" value="12"></span>
   </div>
   <div class="note">
-    ひまわり9号のトゥルーカラー画像（提供：NICT）を、30分ごとに並べて連続再生しています。<br>
+    ひまわり9号のトゥルーカラー画像（提供：NICT）を、10分ごとに並べて連続再生しています。<br>
     地球は静止衛星から見て止まって見え、動くのは雲＝台風の渦です。ドラッグで移動／ホイール・ピンチで拡大。
   </div>
 
 <script>
 const BASE='https://himawari8.nict.go.jp/img/D531106';
-const MOBILE=matchMedia('(max-width:600px)').matches;
-const LEVEL=MOBILE?2:4;   // スマホは軽さ優先で低解像度（画面が小さいので十分きれい）
-const FRAMES=48, STEP=30; // 48フレーム × 30分 = 直近24時間（昼夜が1周してループのつなぎ目が消える）
+const LEVEL=2;             // 全球1100px。コマ数を増やすぶん解像度は控えめ＝滑らかさ優先
+const FRAMES=144, STEP=10; // 144フレーム × 10分 = 直近24時間（公式と同じ10分間隔でなめらか）
 const JP={x:0.50, y:0.235};
 const HOME={x:0.52, y:0.32, z:1.5};   // 初期表示（地球の縁が見える引き＝台風が中央）
 let latest=null, V=0, zoom=1, panX=0, panY=0;
-let frames=[], idx=0, playing=true, fps=8, timer=null;
+let frames=[], idx=0, playing=true, fps=12, timer=null;
 let loaded=0, total=0, ready=false;
 
 const pad=n=>String(n).padStart(2,'0');
