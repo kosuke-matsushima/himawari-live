@@ -229,8 +229,9 @@ document.getElementById('bOut').onclick=()=>zoomAt(V/2,V/2,1/1.3);
 document.getElementById('spd').oninput=e=>{ fps=+e.target.value; if(playing) play(); };
 
 async function rebuild(){
+  cancelAnimationFrame(raf);               // await待ち中の古いループも止める
   latest=await fetchLatest();
-  cancelAnimationFrame(raf);               // 進行中のループを止めてから作り直す（playingは保持）
+  cancelAnimationFrame(raf);               // 作り直し直前にもう一度停止（playingは保持）
   buildFrames();
 }
 function init(){
