@@ -83,7 +83,7 @@ const FRAMES=144, STEP=10; // 144フレーム × 10分 = 直近24時間（公式
 const JP={x:0.50, y:0.235};
 const HOME={x:0.52, y:0.32, z:1.5};   // 初期表示（地球の縁が見える引き＝台風が中央）
 let latest=null, V=0, zoom=1, panX=0, panY=0;
-let frames=[], idx=0, playing=true, fps=12, timer=null;
+let frames=[], idx=0, playing=true, fps=12, raf=0, lastT=0;
 let loaded=0, total=0, started=false, loadGuard=0;
 let tiles=[];
 
@@ -132,7 +132,8 @@ function buildFrames(){
   loaded=0; total=FRAMES*LEVEL*LEVEL; started=false;
   for(let i=FRAMES-1;i>=0;i--){            // 古い→新しい
     const date=new Date(base - i*STEP*60000);
-    const urls=[]; const fobj={date,urls,bad:false,cnt:0,ready:false};
+    const hm=date.getUTCHours()*100+date.getUTCMinutes();   // ひまわりのルーチン休止（02:40/14:40 UTC＝11:40/23:40 JST）はダミー画像なのでスキップ
+    const urls=[]; const fobj={date,urls,bad:(hm===240||hm===1440),cnt:0,ready:false};
     for(let y=0;y<LEVEL;y++) for(let x=0;x<LEVEL;x++){
       const url=urlFor(date,x,y); urls.push(url);
       const pre=new Image();                 // プリロード（キャッシュを温める）
@@ -179,12 +180,18 @@ function showFrame(f){
   tsEl.textContent=`${fmt} JST${tag}`;
 }
 function tick(){ idx=stepReady(idx,1); showFrame(frames[idx]); }
+function frameLoop(t){
+  if(!playing) return;
+  if(!lastT) lastT=t;
+  if(t-lastT >= 1000/fps){ lastT=t; tick(); }
+  raf=requestAnimationFrame(frameLoop);
+}
 function play(){
   playing=true; document.getElementById('bPlay').textContent='⏸';
-  clearInterval(timer);
-  if(started) timer=setInterval(tick,1000/fps);
+  if(!started) return;                       // 読み込み完了後に startPlayback から再度呼ばれる
+  cancelAnimationFrame(raf); lastT=0; raf=requestAnimationFrame(frameLoop);
 }
-function pause(){ playing=false; clearInterval(timer); document.getElementById('bPlay').textContent='▶'; }
+function pause(){ playing=false; cancelAnimationFrame(raf); document.getElementById('bPlay').textContent='▶'; }
 function step(dir){ pause(); idx=stepReady(idx,dir); showFrame(frames[idx]); }   // コマ送り
 
 // ---- 操作 ----
@@ -223,7 +230,7 @@ document.getElementById('spd').oninput=e=>{ fps=+e.target.value; if(playing) pla
 
 async function rebuild(){
   latest=await fetchLatest();
-  clearInterval(timer);                    // 進行中の再生を止めてから作り直す
+  cancelAnimationFrame(raf);               // 進行中のループを止めてから作り直す（playingは保持）
   buildFrames();
 }
 function init(){
